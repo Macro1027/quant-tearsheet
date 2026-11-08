@@ -7,12 +7,18 @@ from api.schemas import SeriesKind
 
 def to_period_returns(values: pd.Series, kind: SeriesKind) -> pd.Series:
     """Simple period returns. A price or level becomes the change from the previous point."""
-    raise NotImplementedError
+    match kind:
+        case 'price':
+            return values.pct_change().dropna()
+        case _:
+            return values 
 
 
 def excess_returns(returns: pd.Series, risk_free: pd.Series | None) -> pd.Series:
     """Return minus the risk-free series. The strategy return itself when no risk-free series was supplied."""
-    raise NotImplementedError
+    if not risk_free:
+        return returns 
+    return returns - risk_free 
 
 
 def growth_of_unit(returns: pd.Series) -> pd.Series:
