@@ -1,86 +1,93 @@
 # Tearsheet — Product Requirements
 
 **Status:** Draft for the first milestone  
-**Owner:** Frontend and file upload live in this repo. All quantitative calculations are implemented separately by the project owner.  
-**Surface:** A single-page, client-only web app. Files stay in the browser.
+**Frontend:** Vite, React, TypeScript. Upload, validation, alignment, and the tearsheet page.  
+**Analysis:** Python, written by the project owner, behind one function. A local process on the same machine exposes that function over HTTP.  
+**Surface:** One page. Files are chosen in the browser. The series leave the browser only as a request to that local process.
 
 ## 1. Summary
 
 Tearsheet is a browser app for turning an uploaded CSV into a full performance tearsheet. The person using it loads a return or price series, optionally a benchmark and a set of factors, and reads the result as one document: headline performance, path and drawdowns, distribution and regression diagnostics, benchmark-relative results, standalone risk, and factor-model risk.
 
-This repository builds the product shell that makes that reading possible:
+The page is a frontend. It uploads, parses, validates, maps, and aligns CSV files, then posts the normalized panel to a local Python service and renders the JSON that comes back. Each block carries a short explanation of the question it answers, so the page is also a map of the subject.
 
-- Upload, parse, validate, map, and align CSV files.
-- Hold the resulting panel in memory and pass it to a single analysis function.
-- Render every tearsheet section from the object that function returns.
-- Explain, in plain language, what each block is for, so the page is also a map of the subject.
-
-This repository does not implement the statistics. Sharpe ratios, regressions, value-at-risk, factor betas, and every other number are produced by code the owner writes against the contract in section 8. Until that function fills a field, the matching block shows an explicit empty state and never a placeholder number.
+The statistics live in Python. Sharpe ratios, regressions, value-at-risk, factor betas, and every other number are produced by `quant/analyze.py`. Until that function fills a section, the matching block shows an explicit empty state and never a placeholder number.
 
 ## 2. Why this exists
 
 A useful tearsheet is wide. Performance, distributional shape, regression against a benchmark, active risk, and factor attribution answer different questions, and they are easy to study as isolated formulas and hard to study as one argument about a track record. The app’s job is to put that whole argument on one screen, fed by the user’s own file, with each block labeled clearly enough that working through the page is a way to learn the material.
 
-The split of work follows from that. The interface, the file pipeline, and the teaching captions are product work. The estimators are the owner’s work, and they should be able to land without a redesign of the page.
+The split of work follows from that. The interface, the file pipeline, and the teaching captions are frontend work. The estimators are Python, and they should be able to land without a redesign of the page. The JSON contract is the only meeting point.
 
 ## 3. Goals
 
 1. A CSV can be loaded, checked, and understood before any analysis runs.
 2. The tearsheet presents a broad, fixed set of sections covering performance, statistical and regression analysis, benchmarking, risk, and factor models.
 3. Each section can render as soon as its data is present, and can stay empty while the rest of the page works.
-4. The owner can implement analysis by filling in one typed function and the types next to it, without changing upload or layout code.
-5. Series data never leaves the browser in this version.
+4. The owner implements analysis as a Python function, `analyze(panel) -> TearsheetModel`, without changing upload or layout code.
+5. Series are posted only to the local analysis process. The process keeps nothing after the response is sent.
 
 ## 4. Non-goals
 
-- Computing any performance, risk, regression, or factor statistic.
-- Converting prices to returns, excess returns, or log returns. The screen records what kind of series the file is; the analysis function interprets it.
+- Computing any performance, risk, regression, or factor statistic in the frontend, or in the first milestone’s Python stub.
+- Converting prices to returns, excess returns, or log returns. The screen records what kind of series the file is; the Python function interprets it.
 - Filling missing returns, winsorizing, or choosing an imputation rule.
 - A backtest engine, an optimizer, a broker connection, or a market-data feed.
-- Accounts, a backend, cloud storage, or multi-user sharing.
+- Accounts, a hosted service, cloud storage, or multi-user sharing.
+- The Python process parsing CSV files or serving the web page.
 - Generating a PDF. A print stylesheet is enough for this version.
 
 ## 5. Who it is for
 
-One user: the owner, studying a strategy or portfolio they already have numbers for. They know what they want to compute, and they want the page to demand the full set of standard tearsheet questions rather than a thin summary. Secondary use is reopening the same page with a different file and comparing the shape of the report, not storing a library of past runs.
+One user: the owner, studying a strategy or portfolio they already have numbers for, and writing the analysis in Python. They know what they want to compute, and they want the page to demand the full set of standard tearsheet questions rather than a thin summary. Secondary use is reopening the same page with a different file and comparing the shape of the report, not storing a library of past runs.
 
 ## 6. Decisions
 
 | Topic | Decision |
 | --- | --- |
-| Stack | Vite, React, TypeScript, Tailwind CSS. Charts render data they are given. |
-| Persistence | In memory for the session. Column-mapping choices may be stored in `localStorage`. Series values are not. |
-| Analysis entry | `src/quant/analyze.ts` exports `analyze(input: AnalysisInput): TearsheetModel`. The file ships as a stub that returns every section as `null`. The owner replaces the body. |
-| Types | `src/types/tearsheet.ts` is the shared contract. Frontend and analysis both import it. |
-| Default series kind | The user must choose Returns, Price / level, or Excess return before analysis runs. The app does not guess a conversion. |
+| Frontend | Vite, React, TypeScript, Tailwind CSS. Charts render data they are given. |
+| Analysis language | Python 3.11 or newer. |
+| Local service | FastAPI, served by uvicorn at `127.0.0.1:8000`. One route does the work: `POST /analyze`. |
+| Dev wiring | The Vite dev server proxies `/api` to port 8000. The page calls `/api/analyze` and `/api/health`. |
+| Wire format | JSON, camelCase, matching the types in this document. `null` is the empty section. |
+| Schemas | `src/types/tearsheet.ts` and `api/schemas.py` both follow this document. A field change updates the document, then both schema files, then the component that draws the field. |
+| Owner entry | `quant/analyze.py` defines `analyze(panel: AnalysisInput) -> TearsheetModel`. The shipped body returns every section as `None`. The owner replaces that body. |
+| API shell | `api/main.py` validates the body, calls `analyze`, and returns the model. It stays thin. |
+| Persistence | In memory for the session. Column-mapping choices may be stored in `localStorage`. Series values are not. The Python process writes nothing to disk. |
+| Series kind | The user chooses Returns, Price / level, or Excess return before analysis runs. The app does not guess a conversion. |
 | Alignment | Inner join on parsed dates across strategy, benchmark, risk-free, and factors. The user can switch to “strategy dates only” and leave other series missing where dates do not match. |
-| Date range | A range control slices the aligned panel, then calls `analyze` again. Slicing is frontend work. |
-| Frequency | Detect a candidate from the median gap between dates, show it, and let the user override to daily, weekly, monthly, or quarterly. The override is passed through; annualization stays in the analysis function. |
-| Numbers on screen | Format only. The analysis function returns raw values. The UI applies percent, ratio, and date formatting. |
-| Empty numbers | A missing section is `null`. The UI must not substitute zero. |
+| Date range | A range control slices the aligned panel, then posts it again. Slicing is frontend work. |
+| Frequency | Detect a candidate from the median gap between dates, show it, and let the user override to daily, weekly, monthly, or quarterly. The override is sent through; annualization stays in Python. |
+| Numbers on screen | Format only. Python returns raw finite values. The UI applies percent, ratio, and date formatting. |
+| Empty numbers | A missing section is `null`. The UI must not substitute zero. Python emits `null` for an undefined metric, never `NaN` or `Infinity`, which are not valid JSON. |
 
 ## 7. Experience
 
 The app is one page with two regions.
 
-**Data dock.** Three upload slots — strategy (required), benchmark (optional), factors (optional) — plus a short validation summary, series kind, frequency, alignment, and date range. A strategy file may already contain benchmark and risk-free columns; the mapper can point at those and the extra slots stay unused.
+**Data dock.** Three upload slots — strategy (required), benchmark (optional), factors (optional) — plus a short validation summary, series kind, frequency, alignment, and date range. A strategy file may already contain benchmark and risk-free columns; the mapper can point at those and the extra slots stay unused. A status line reads “Analysis service connected” or “Analysis service is not running,” based on `GET /api/health`.
 
 **Tearsheet.** A single scrolling report. The order is fixed: overview, performance, distribution and regression, benchmark, risk, factor model. A section with a `null` model is still visible, with its title, a two- or three-sentence explanation of the question it answers, and the sentence “Not computed yet.” A section with data shows the charts and tables below and keeps the explanation.
 
-Changing a file, a mapping, the date range, the frequency override, or the alignment rule rebuilds the panel and calls `analyze` again. The previous tearsheet stays on screen until the new model returns.
+Changing a file, a mapping, the date range, the frequency override, or the alignment rule rebuilds the panel and posts it again. The previous tearsheet stays on screen until the new model arrives. While the request is in flight, a thin progress line shows on the report.
 
 There is no second page in this version. There is no saved-history list.
 
-## 8. The contract the analysis function implements
+Two processes run in development: the Vite server for the page, and uvicorn for analysis. The page is useful with only Vite running; every section then sits in its empty state and the dock says the analysis service is not running.
 
-The frontend guarantees a normalized panel. The analysis function guarantees a model whose sections are either fully absent (`null`) or populated with the fields for that section. Partial objects inside a section are not part of the contract.
+## 8. The contract
 
-### 8.1 What the frontend passes in
+The frontend guarantees a normalized panel. Python guarantees a model whose sections are either fully absent (`null`) or populated with the fields for that section. Partial objects inside a section are outside the contract.
+
+### 8.1 Request
+
+`POST /api/analyze` with a JSON body:
 
 ```ts
 type SeriesKind = "returns" | "price" | "excess";
 type Frequency = "daily" | "weekly" | "monthly" | "quarterly";
 type Alignment = "inner" | "strategy-dates";
+type ValueScale = "decimal" | "percent";
 
 type Point = { date: string; value: number }; // ISO date, finite number
 
@@ -88,6 +95,12 @@ type AnalysisInput = {
   seriesKind: SeriesKind;
   frequency: Frequency;
   alignment: Alignment;
+  valueScale: {
+    strategy: ValueScale;
+    benchmark: ValueScale | null;
+    riskFree: ValueScale | null;
+    factors: Record<string, ValueScale>;
+  };
   strategy: Point[];
   benchmark: Point[] | null;
   riskFree: Point[] | null;
@@ -96,9 +109,11 @@ type AnalysisInput = {
 };
 ```
 
-Dates are sorted ascending. Duplicate dates have already been rejected. Values are finite numbers in the units of the file (a return of 1% may be `0.01` or `1`; the UI records which, see section 9). The frontend does not scale them.
+Dates are sorted ascending. Duplicate dates have already been rejected. Values are finite numbers in the units of the file. A printed `1%` is stored as `1` and the matching `valueScale` entry is `"percent"`. A plain `0.01` is stored as `0.01` with `"decimal"`. Scaling, if any, happens in Python.
 
-### 8.2 What the analysis function returns
+### 8.2 Response
+
+`200` and this JSON object:
 
 ```ts
 type TearsheetModel = {
@@ -111,20 +126,34 @@ type TearsheetModel = {
 };
 ```
 
-Field lists for each model are in section 10. They are display fields: the number, the sample size it was computed on, and enough series to draw the chart. The type file is the source of truth when this document and the code disagree; this document is the source of truth for what the screen must contain.
+Field lists for each model are in section 10. They are display fields: the number, the sample size it was computed on, and enough series to draw the chart. This document is the source of truth for the JSON shape and for what the screen must contain.
 
 The stub returns all six fields as `null`. The owner may ship one section at a time by returning a model for that section and `null` for the others.
 
-### 8.3 How the UI treats the function
+### 8.3 Python entry
 
-- `analyze` is called only when the strategy series has at least two points after slicing and the user has confirmed series kind.
-- The UI calls it synchronously first. The call site is written so it can later return a promise without a change to the sections.
-- A thrown error is shown as a banner on the tearsheet (“Analysis failed”) with the message, and the previous successful model remains visible if there was one.
-- The UI never inspects intermediate math, only `TearsheetModel`.
+```python
+def analyze(panel: AnalysisInput) -> TearsheetModel:
+    return TearsheetModel()
+```
+
+`TearsheetModel()` defaults every section to `None`. Pydantic models in `api/schemas.py` use the camelCase names from this document as their serialization names, so the function’s return value is the response body.
+
+`api/main.py` does four things: parse the body into `AnalysisInput`, call `analyze`, serialize the result, and turn a raised exception into `500` with `{ "message": "<the exception text>" }`. A body that fails schema validation returns `422` with the same `{ "message" }` shape, using a short summary of the validation error. The process stores no request and no response.
+
+`GET /api/health` returns `{ "status": "ok" }`.
+
+### 8.4 How the page treats the response
+
+- The page posts only when the strategy series has at least two points after slicing and the user has confirmed series kind.
+- The call is asynchronous. The report keeps the previous successful model and shows the progress line until the response arrives.
+- A connection failure, a non-200 status, a body that is not the model, or a non-finite number anywhere in the body shows a banner (“Analysis service is not running” or “Analysis failed,” plus `message` when one was returned). The previous successful model stays visible.
+- The page never inspects intermediate math, only `TearsheetModel`.
+- The dock polls `/api/health` every three seconds while the status is disconnected. A transition to connected posts the current panel when one is ready.
 
 ## 9. File upload and management
 
-This is the part of the product this milestone fully implements.
+This is the part of the product the frontend milestone fully implements. Parsing stays in the browser. Python receives the panel described in section 8 and never the original file.
 
 ### 9.1 Slots
 
@@ -134,7 +163,7 @@ This is the part of the product this milestone fully implements.
 | Benchmark | No | Date column plus one value column, used when the benchmark is not already in the strategy file. |
 | Factors | No | Date column plus one column per factor. Column headers become factor names. |
 
-Each slot accepts one file at a time. Replacing a file clears that slot’s mapping and re-runs validation. Removing the strategy file clears the tearsheet back to the initial empty page. Removing the benchmark or factors file recomputes without those inputs.
+Each slot accepts one file at a time. Replacing a file clears that slot’s mapping and re-runs validation. Removing the strategy file clears the tearsheet back to the initial empty page. Removing the benchmark or factors file posts a new panel without those inputs.
 
 ### 9.2 Accepting a file
 
@@ -156,12 +185,12 @@ After a successful parse, the slot shows the header list, a five-row preview, an
 - **Risk-free** — optional, strategy file only, or a column in the benchmark file labeled as such.
 - Factor files have no value picker. Every non-date column is a factor. The user can exclude a column.
 
-The user can override every suggestion. Analysis stays disabled until the strategy date and value are both mapped and valid.
+The user can override every suggestion. The page posts a panel only once the strategy date and value are both mapped and valid.
 
 ### 9.4 Parsing cells
 
 - Dates: ISO `YYYY-MM-DD`, `YYYY/MM/DD`, `DD/MM/YYYY`, `MM/DD/YYYY`, and timestamps whose calendar date is unambiguous. Ambiguous day/month values are reported and the user picks a day-first or month-first reading for that file.
-- Numbers: strip thousands separators and a trailing percent sign; parentheses mean negative. A trailing percent sign marks the column as “quoted in percent” and the UI shows that flag next to the series kind. The stored number keeps the percent sign removed and is **not** divided by 100. The flag is passed on the input as `valueScale: "decimal" | "percent"` per series, so the analysis function can scale if it chooses.
+- Numbers: strip thousands separators and a trailing percent sign; parentheses mean negative. A trailing percent sign marks the column as “quoted in percent” and the UI shows that flag next to the series kind. The stored number is the printed figure with the sign removed: `1%` is stored as `1`, and `valueScale` for that series is `"percent"`. Python applies the scale.
 - Blank cells, `NA`, `N/A`, `null`, and `NaN` are missing. Missing value rows are dropped from that series and counted in the validation summary. They are not filled.
 
 ### 9.5 Validation
@@ -177,7 +206,7 @@ The user can override every suggestion. Analysis stays disabled until the strate
 
 - Dates were out of order. The app sorts them and says so.
 - Gaps: a gap larger than three times the median spacing. Count and first examples are shown.
-- The series is marked percent (a percent sign was present) or looks like it might be (median absolute value greater than 1). The second case is a warning, not a conversion.
+- The series is marked percent (a percent sign was present) or looks like it might be (median absolute value greater than 1). The second case is a warning, and the stored values stay as parsed.
 - Benchmark or factor dates cover only part of the strategy. The summary states how many strategy dates survive the current alignment.
 - Irregular spacing, so the frequency guess is weak.
 
@@ -186,8 +215,8 @@ The validation summary is always visible in the dock while a file is loaded: row
 ### 9.6 Preview and range
 
 - The dock shows a scrollable preview of the mapped strategy series (date and value), up to the first 100 rows, with a note of the full count.
-- The date-range control defaults to the full aligned span. The user can narrow it. The sliced series is what `analyze` receives, and the preview marks rows outside the range.
-- Frequency is a select: Auto, Daily, Weekly, Monthly, Quarterly. Auto displays the detected candidate. The value sent to `analyze` is the override, or the candidate when Auto is selected. If Auto cannot decide, the control requires an explicit choice.
+- The date-range control defaults to the full aligned span. The user can narrow it. The sliced series is what the request body contains, and the preview marks rows outside the range.
+- Frequency is a select: Auto, Daily, Weekly, Monthly, Quarterly. Auto displays the detected candidate. The value sent in the body is the override, or the candidate when Auto is selected. If Auto cannot decide, the control requires an explicit choice.
 
 ### 9.7 Session behavior
 
@@ -197,7 +226,7 @@ The validation summary is always visible in the dock while a file is loaded: row
 
 ## 10. Tearsheet sections
 
-Each section has a stable title, a short explanation, and a body that depends on its model. Charts receive points already computed by the analysis function. The UI sorts them by date for display if needed and does not transform values beyond formatting.
+Each section has a stable title, a short explanation, and a body that depends on its model. Charts receive points already computed in Python. The UI sorts them by date for display if needed and does not transform values beyond formatting.
 
 Explanations live in the frontend copy. They define the question the block answers. They do not state a formula.
 
@@ -209,7 +238,7 @@ Explanations live in the frontend copy. They define the question the block answe
 
 - Identity line: series kind, frequency, alignment, start, end, number of observations used.
 - Tiles: total growth of a unit, annualized return, annualized volatility, Sharpe ratio, maximum drawdown, Calmar ratio. Each tile shows the value and a one-line gloss from the copy deck (for example, Sharpe’s gloss is “Return in excess of the risk-free series, per unit of volatility”).
-- If `riskFree` is null, the Sharpe tile still renders when the model provides it, and the gloss notes that the analysis function chose the risk-free treatment.
+- If `riskFree` is null, the Sharpe tile still renders when the model provides it, and the gloss notes that the Python function chose the risk-free treatment.
 
 **Model.**
 
@@ -227,7 +256,7 @@ type OverviewModel = {
 };
 ```
 
-`sharpe` and `calmar` may be `null` when the analysis function refuses them (for example, zero volatility). The tile then reads “Undefined” and does not show a fake value. A `null` overview section is the whole-section empty state, distinct from a null tile inside a present overview.
+`sharpe` and `calmar` may be `null` when Python refuses them (for example, zero volatility). The tile then reads “Undefined” and does not show a fake value. A `null` overview section is the whole-section empty state, distinct from a null tile inside a present overview.
 
 ### 10.2 Performance
 
@@ -432,22 +461,32 @@ Factor names are the CSV headers the user kept. The UI does not rename them to a
 
 ## 12. Components
 
-The first implementation is expected to split along these lines. Names can change; responsibilities should not.
+The frontend splits along these lines. Names can change; responsibilities should not.
 
 | Piece | Responsibility |
 | --- | --- |
-| `App` | Holds slot state, build the `AnalysisInput`, call `analyze`, hold the model and the last error. |
-| `DataDock` | Slots, validation summary, series kind, scale flags, frequency, alignment, range, reset. |
+| `App` | Holds slot state, builds `AnalysisInput`, posts it, holds the model and the last error. |
+| `DataDock` | Slots, validation summary, series kind, scale flags, frequency, alignment, range, service status, reset. |
 | `UploadSlot` | Drop zone, picker, parse, preview, mapping, remove and replace. |
 | `parseCsv` | Delimiter, header, type checks, date and number parsing, duplicate and gap reports. No statistics. |
 | `alignPanel` | Join on dates, apply the range slice, produce `AnalysisInput`. |
+| `api/analyze` (client) | `POST /api/analyze`, parse the JSON, surface connection and HTTP failures. |
 | `Tearsheet` | Renders the six sections from a model. |
 | `Section` | Title, explanation, empty state, error isolation so one bad chart does not blank the page. |
 | `MetricTiles`, chart wrappers, tables | Presentation of fields already on the model. |
-| `src/quant/analyze.ts` | Stub. Owner’s code. |
-| `src/types/tearsheet.ts` | The types in sections 8 and 10. |
+| `src/types/tearsheet.ts` | TypeScript side of the JSON contract. |
 
 A chart wrapper that receives `null` renders nothing and leaves the section-level empty state in charge. A wrapper that receives an empty array renders “No points in range.”
+
+The Python side of the same milestone is the shell around the owner’s function.
+
+| Piece | Responsibility |
+| --- | --- |
+| `api/schemas.py` | Pydantic models for `AnalysisInput` and `TearsheetModel`, serializing to the camelCase JSON in this document. |
+| `api/main.py` | `GET /health`, `POST /analyze`, exception mapping. |
+| `quant/analyze.py` | The stub, then the owner’s implementation. Helpers the owner adds live under `quant/`. |
+
+Inside `analyze`, converting `Point` lists into a pandas `Series` or a DataFrame is part of the owner’s code. The request and the response stay JSON at the boundary.
 
 ## 13. Empty, loading, and failure states
 
@@ -456,12 +495,14 @@ A chart wrapper that receives `null` renders nothing and leaves the section-leve
 | No strategy file | The dock, plus a tearsheet intro that lists the six sections and says a strategy CSV is the starting point. |
 | File rejected | The slot shows the blocking reason. Other slots are unchanged. |
 | File accepted, mapping incomplete | Preview and the list of what is still unmapped. Tearsheet stays on the intro. |
+| Service disconnected | Dock status “Analysis service is not running.” A ready panel shows the banner of the same wording. Sections with no previous model stay at “Not computed yet.” |
+| Request in flight | Previous model stays. A thin progress line shows on the report. |
 | Ready | The report, with each section filled or explicitly not computed. |
-| Analysis threw | Banner with the error message, previous model kept. |
-| Date range leaves fewer than two points | Analysis is not called. The report says the range is too short. |
+| Analysis raised, or the body was invalid | Banner “Analysis failed” with the message. Previous model kept. |
+| Date range leaves fewer than two points | No request is sent. The report says the range is too short. |
 | Benchmark or factors absent | Those sections show the “add a file” empty state. Other sections still render. |
 
-Busy state: parsing a multi-megabyte file shows a slot-level “Reading file…” state and disables that slot’s replace control until parsing finishes. The analysis stub is instant. When `analyze` becomes asynchronous, the report shows a thin progress line and keeps the previous model.
+Parsing a multi-megabyte file shows a slot-level “Reading file…” state and disables that slot’s replace control until parsing finishes.
 
 ## 14. Accessibility and input
 
@@ -473,39 +514,53 @@ Busy state: parsing a multi-megabyte file shows a slot-level “Reading file…�
 ## 15. Project layout
 
 ```
-src/
-  components/        # dock, tearsheet, charts, tables
-  copy/sections.ts   # explanations
+src/                     # frontend
+  components/            # dock, tearsheet, charts, tables
+  copy/sections.ts       # explanations
   lib/parseCsv.ts
   lib/alignPanel.ts
   lib/format.ts
-  quant/analyze.ts   # stub, then the owner's implementation
+  api/analyze.ts         # HTTP client
   types/tearsheet.ts
   App.tsx
   main.tsx
+api/
+  main.py                # FastAPI shell
+  schemas.py             # pydantic models of the JSON contract
+quant/
+  analyze.py             # stub, then the owner's implementation
+requirements.txt         # fastapi, uvicorn, pydantic for the shell
 ```
 
-Dependencies for the first build: React, a CSV parser, and one chart library. No statistics library. Adding one later is the owner’s choice inside `src/quant/` and does not change the contract.
+Frontend dependencies for the first build: React, a CSV parser, and one chart library. No statistics library in the frontend. Python dependencies for the shell: FastAPI, uvicorn, and Pydantic. NumPy, pandas, statsmodels, and anything else the estimators need are added by the owner when `quant/analyze.py` starts using them.
+
+Development commands:
+
+- Frontend: the Vite dev server, proxying `/api` to `127.0.0.1:8000`.
+- Analysis: `uvicorn api.main:app --reload --host 127.0.0.1 --port 8000` from the repo root, with the repo on `PYTHONPATH`.
 
 ## 16. Acceptance for this milestone
 
 The milestone is done when all of the following are true.
 
 1. A strategy CSV can be dropped or chosen, mapped, previewed, and cleared, and a bad file is refused with a specific reason.
-2. Optional benchmark and factor files participate in alignment, and removing them updates the input.
-3. Series kind, percent scale flag, frequency, alignment, and date range are visible and are part of `AnalysisInput`.
-4. With the stub in place, all six sections render their explanations and the correct empty state, and no section shows a zero in place of a missing result.
-5. A hand-built `TearsheetModel` returned from `analyze` (a fixture the owner can temporarily return) fills every chart and table in this document without further UI work.
-6. A thrown error in `analyze` surfaces the banner and leaves the last good model on screen.
-7. Reloading the page leaves no series values behind in storage. Remapping a file whose headers were mapped before restores those roles.
-8. The page is usable at laptop width and with the dock stacked, and printing hides the upload controls.
+2. Optional benchmark and factor files participate in alignment, and removing them sends an updated panel.
+3. Series kind, percent scale flag, frequency, alignment, and date range are visible and are fields of the JSON body.
+4. With the Python stub running, all six sections render their explanations and the correct empty state, and no section shows a zero in place of a missing result.
+5. A hand-built `TearsheetModel` returned from `quant/analyze.py` fills every chart and table in this document without further UI work.
+6. An exception raised in `analyze` surfaces “Analysis failed” and the exception text, and leaves the last good model on screen.
+7. With uvicorn stopped, the dock reports that the analysis service is not running, and the last good model stays on screen.
+8. Reloading the page leaves no series values behind in browser storage. Remapping a file whose headers were mapped before restores those roles. The Python process has written no series to disk.
+9. The page is usable at laptop width and with the dock stacked, and printing hides the upload controls.
+
+Frontend tests cover parsing, alignment, formatting, and “given this JSON model, these labels appear,” with the HTTP call mocked. Tests of statistical correctness belong next to the Python implementation.
 
 ## 17. Later, outside this milestone
 
-These are named so the frontend does not accidentally absorb them.
+These are named so the frontend does not absorb them, and so the API shell stays a shell.
 
-- The body of `analyze` and any helper modules under `src/quant/` beyond the stub.
-- Tests of statistical correctness. Frontend tests cover parsing, alignment, formatting, and “given this model, these labels appear.”
-- A second strategy side by side, a trade blotter, and anything that needs a server.
+- The body of `quant/analyze.py`, and any helper modules the owner adds under `quant/`.
+- Python tests of the estimators.
+- A second strategy side by side, a trade blotter, and a hosted service.
 
-When the owner implements a section, the only required edit outside `src/quant/` is none. If a result genuinely cannot fit the model, the type in `src/types/tearsheet.ts` changes first, and the matching component follows. The upload pipeline stays as specified here.
+When the owner implements a section, the required edit is inside `quant/`. If a result cannot fit the model, this document changes first, then `src/types/tearsheet.ts` and `api/schemas.py`, then the component that draws the new field. The upload pipeline stays as specified here.
