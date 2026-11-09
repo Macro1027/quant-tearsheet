@@ -3,7 +3,7 @@
 import pandas as pd
 
 from api.schemas import DrawdownEpisode
-
+from quant.tools import date_to_str
 
 def underwater(growth: pd.Series) -> pd.Series:
     """Depth below the running peak at each date. Zero at a peak, negative below it."""
@@ -48,9 +48,6 @@ def ulcer_index(path: pd.Series) -> float | None:
 
 
 def episodes(path: pd.Series) -> list[DrawdownEpisode]:
-    def date_to_str(stamp) -> str:
-        return pd.Timestamp(stamp).strftime("%Y-%m-%d")
-
     found = []
     start = None
     trough_date = None

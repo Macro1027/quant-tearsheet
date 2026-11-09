@@ -16,11 +16,12 @@ from quant.returns import (
 from tests.support import assert_series, close, on
 
 PRICES = on(["2020-01-31", "2020-02-29", "2020-03-31"], [100, 110, 99])
+PRICE_RETURNS = on(["2020-02-29", "2020-03-31"], [0.10, -0.10])
 RETURNS = on(["2020-01-31", "2020-02-29"], [0.10, -0.10])
 
 
 def test_to_period_returns_turns_a_price_into_a_simple_return():
-    assert_series(to_period_returns(PRICES, "price"), RETURNS)
+    assert_series(to_period_returns(PRICES, "price"), PRICE_RETURNS)
 
 
 def test_to_period_returns_leaves_a_return_series_unchanged():

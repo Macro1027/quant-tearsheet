@@ -9,8 +9,7 @@ def to_period_returns(values: pd.Series, kind: SeriesKind) -> pd.Series:
     """Simple period returns. A price or level becomes the change from the previous point."""
     match kind:
         case 'price':
-            series = values.pct_change().dropna()
-            return pd.Series(series.to_numpy(), index=values.index[:-1])
+            return values.pct_change().dropna()
         case _:
             return values 
 
